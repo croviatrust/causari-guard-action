@@ -1,5 +1,5 @@
 name: 'Causari Guard'
-description: 'Privacy-preserving causal watchdog for AI-generated code. Runs re guard and posts findings to PR comments. Zero data leaves your repo.'
+description: 'Privacy-preserving causal watchdog for AI-generated code'
 author: 'Croviatrust'
 branding:
   icon: shield
@@ -7,28 +7,61 @@ branding:
 
 inputs:
   token:
-    description: 'GitHub token for PR comments. Defaults to GITHUB_TOKEN.'
+    description: 'GitHub token for PR comments'
     required: false
-    default: ${{ github.token }}
+    default: ''
   limit:
-    description: 'Number of recent events to scan (default: 20)'
+    description: 'Events to scan'
     required: false
     default: '20'
   fail-on-alert:
-    description: 'Fail the workflow if any alert is found'
+    description: 'Fail CI on alert'
     required: false
     default: 'true'
 
 runs:
   using: 'composite'
   steps:
-    - name: Run Causari Guard
-      run: ${{ github.action_path }}/guard.sh
+    - name: Install Causari
       shell: bash
-      env:
-        INPUT_TOKEN: ${{ inputs.token }}
-        INPUT_LIMIT: ${{ inputs.limit }}
-        INPUT_FAIL_ON_ALERT: ${{ inputs.fail-on-alert }}
-        GITHUB_TOKEN: ${{ inputs.token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        REPO: ${{ github.repository }}
+      run: |
+        if ! command -v re &> /dev/null; then
+          cargo install --git https://github.com/croviatrust/causari --locked
+        fi
+    - name: Run Guard
+      shell: bash
+      run: |
+        set -euo pipefail
+        SUMMARY=$(re guard --summary -n "${{ inputs.limit }}" 2>&1 || true)
+        echo "$SUMMARY"
+        ALERTS=$(echo "$SUMMARY" | grep -c '🔴' || echo "0")
+        WARNINGS=$(echo "$SUMMARY" | grep -c '🟡' || echo "0")
+        if [ "$ALERTS" -gt 0 ]; then STATUS="❌ failing"; COLOR="#EF4444"
+        elif [ "$WARNINGS" -gt 0 ]; then STATUS="⚠️ warnings"; COLOR="#F59E0B"
+        else STATUS="✅ passing"; COLOR="#22C55E"; fi
+        if [ -n "${{ github.event.pull_request.number }}" ] && [ -n "${{ inputs.token }}" ]; then
+          BODY="## Causari Guard — ${STATUS}
+
+${SUMMARY}
+
+<sub>Powered by [Causari Guard](https://github.com/croviatrust/causari-guard-action)</sub>"
+          if command -v jq &> /dev/null; then
+            JSON_BODY=$(printf '%s' "$BODY" | jq -s -R .)
+          elif command -v python3 &> /dev/null; then
+            JSON_BODY=$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<< "$BODY")
+          else
+            echo "::warning::No jq or python3. Skipping PR comment."
+            JSON_BODY=""
+          fi
+          if [ -n "$JSON_BODY" ]; then
+            curl -sSL -H "Authorization: token ${{ inputs.token }}" \
+              -H "Accept: application/vnd.github+json" -X POST \
+              -d "{\"body\":$JSON_BODY}" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" > /dev/null
+            echo "Posted guard summary to PR #${{ github.event.pull_request.number }}"
+          fi
+        fi
+        if [ "${{ inputs.fail-on-alert }}" = "true" ] && [ "$ALERTS" -gt 0 ]; then
+          echo "::error::Guard found $ALERTS alert(s)"
+          exit 1
+        fi
