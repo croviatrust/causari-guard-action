@@ -14,7 +14,7 @@ That's it. No API keys to manage. No cloud dashboard. No telemetry.
 
 Every time a pull request is opened or updated:
 
-1. **Installs** the latest `re` binary (builds from source if no pre-built release exists — ~2 minutes on GitHub runners).
+1. **Installs** the latest `re` binary (~2 seconds by downloading a pre-built release for your runner's exact OS and architecture).
 2. **Runs** `re guard --summary` on the PR branch.
 3. **Posts** a Markdown table to the PR comment thread:
 
