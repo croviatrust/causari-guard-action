@@ -34,12 +34,18 @@ name: Causari Guard
 on:
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: croviatrust/causari-guard-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### With options
