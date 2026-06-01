@@ -25,9 +25,34 @@ runs:
     - name: Install Causari
       shell: bash
       run: |
-        if ! command -v re &> /dev/null; then
-          cargo install --git https://github.com/croviatrust/causari --locked
+        if command -v re &> /dev/null; then
+          echo "re already installed"
+          exit 0
         fi
+        OS=$(uname -s)
+        ARCH=$(uname -m)
+        case "$OS" in
+          Linux)   PLATFORM="unknown-linux-gnu" ;;
+          Darwin)  PLATFORM="apple-darwin" ;;
+          MINGW*|MSYS*|CYGWIN*) PLATFORM="pc-windows-msvc"; EXT=".exe" ;;
+          *)       echo "Unsupported OS: $OS"; exit 1 ;;
+        esac
+        case "$ARCH" in
+          x86_64)  TARGET="x86_64-${PLATFORM}" ;;
+          aarch64) TARGET="aarch64-${PLATFORM}" ;;
+          arm64)   TARGET="aarch64-${PLATFORM}" ;;
+          *)       echo "Unsupported arch: $ARCH"; exit 1 ;;
+        esac
+        URL="https://github.com/croviatrust/causari/releases/latest/download/re-${TARGET}.tar.gz"
+        echo "Downloading re for ${TARGET}..."
+        curl -sSL "$URL" -o /tmp/re.tar.gz
+        if [ -n "${EXT:-}" ]; then
+          tar xzf /tmp/re.tar.gz -C /usr/bin
+        else
+          tar xzf /tmp/re.tar.gz -C /usr/local/bin --strip-components=0
+          chmod +x /usr/local/bin/re
+        fi
+        echo "Installed re"
     - name: Run Guard
       shell: bash
       run: |
