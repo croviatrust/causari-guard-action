@@ -57,36 +57,41 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        SUMMARY=$(re guard --summary -n "${{ inputs.limit }}" 2>&1 || true)
-        echo "$SUMMARY"
-        ALERTS=$(echo "$SUMMARY" | grep -c '🔴' || echo "0")
-        WARNINGS=$(echo "$SUMMARY" | grep -c '🟡' || echo "0")
-        if [ "$ALERTS" -gt 0 ]; then STATUS="❌ failing"; COLOR="#EF4444"
-        elif [ "$WARNINGS" -gt 0 ]; then STATUS="⚠️ warnings"; COLOR="#F59E0B"
-        else STATUS="✅ passing"; COLOR="#22C55E"; fi
-        if [ -n "${{ github.event.pull_request.number }}" ] && [ -n "${{ inputs.token }}" ]; then
-          BODY="## Causari Guard — ${STATUS}
+        re guard --summary -n "${{ inputs.limit }}" > "$RUNNER_TEMP/guard-summary.md"
+        cat "$RUNNER_TEMP/guard-summary.md"
 
-${SUMMARY}
-
-<sub>Powered by [Causari Guard](https://github.com/croviatrust/causari-guard-action)</sub>"
-          if command -v jq &> /dev/null; then
-            JSON_BODY=$(printf '%s' "$BODY" | jq -s -R .)
-          elif command -v python3 &> /dev/null; then
-            JSON_BODY=$(python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' <<< "$BODY")
-          else
-            echo "::warning::No jq or python3. Skipping PR comment."
-            JSON_BODY=""
-          fi
-          if [ -n "$JSON_BODY" ]; then
-            curl -sSL -H "Authorization: token ${{ inputs.token }}" \
-              -H "Accept: application/vnd.github+json" -X POST \
-              -d "{\"body\":$JSON_BODY}" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" > /dev/null
-            echo "Posted guard summary to PR #${{ github.event.pull_request.number }}"
-          fi
+    - name: Post / update PR comment
+      if: ${{ github.event.pull_request.number && inputs.token != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        MARKER="<!-- causari-guard -->"
+        {
+          echo "$MARKER"
+          cat "$RUNNER_TEMP/guard-summary.md"
+        } > "$RUNNER_TEMP/comment.md"
+        ID=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+               --jq "map(select(.body | contains(\"$MARKER\"))) | .[0].id // empty")
+        if [ -n "$ID" ]; then
+          gh api -X PATCH "repos/${REPO}/issues/comments/${ID}" \
+            -F body=@"$RUNNER_TEMP/comment.md" >/dev/null
+          echo "Updated existing guard comment ($ID)."
+        else
+          gh pr comment "$PR" --body-file "$RUNNER_TEMP/comment.md"
+          echo "Posted new guard comment."
         fi
-        if [ "${{ inputs.fail-on-alert }}" = "true" ] && [ "$ALERTS" -gt 0 ]; then
-          echo "::error::Guard found $ALERTS alert(s)"
+
+    - name: Enforce fail-on-alert
+      if: ${{ inputs.fail-on-alert == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if grep -q '🔴' "$RUNNER_TEMP/guard-summary.md"; then
+          COUNT=$(grep -c '🔴' "$RUNNER_TEMP/guard-summary.md")
+          echo "::error::Causari Guard found $COUNT alert(s)"
           exit 1
         fi
